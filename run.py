@@ -1,18 +1,13 @@
-#!/usr/bin/env python3
-
-import json
 import logging
 import time
 from datetime import date, timedelta
-
 import holidays
 import requests
 import schedule
-from bs4 import BeautifulSoup
 from pid.decorator import pidfile
-from settings import (CHAT_ID, TOKEN, bin_, headers_api, location, payload_api,
-                      type_, url, url_api)
 from telegram.ext import Updater
+
+from settings import TOKEN, url_api
 
 # Enable logging
 logging.basicConfig(
@@ -23,67 +18,69 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def job(bot, addDayDebug=0):
+def job(bot, time):
+    print(time)
+    addDayDebug=0
     # get present day and add one day
     EndDate = date.today() + timedelta(days=2 + addDayDebug)
-
-    # Get wdtNonce
-    response_wdtNonce = requests.request(
-        "GET", url
-    )
-    soup = BeautifulSoup(response_wdtNonce.text, features="html.parser")
-    wdtNonceFrontendEdit = soup.find("input", {"id": "wdtNonceFrontendEdit"}).get(
-        "value"
-    )
-
+    EndDateHoly = date.today() + timedelta(days=1 + addDayDebug)
     it_holidays = holidays.country_holidays('IT', subdiv='RC')
 
-    if EndDate.weekday() != 0 and not EndDate in it_holidays:
-        waste = ""
-        response_api = requests.request(
-            "POST",
-            url_api,
-            headers=headers_api,
-            data=payload_api + wdtNonceFrontendEdit,
-        )
-        data = json.loads(response_api.text)
+    if EndDate.weekday() != 0 and not EndDateHoly in it_holidays:
+        
+        # Eseguo la richiesta GET al link fornito
+        response = requests.get(url_api)
+
+        # Estraggo il JSON dalla risposta
+        json_data_array = response.json()
 
         # create the message to be sent on Telegram
-        for a in range(len(data["data"])):
-            for b in range(len(data["data"][a])):
-                if b == EndDate.weekday() and data["data"][a][b + 1] != "":
-                    waste += "*{}*{}\n".format(
-                        type_[str(data["data"][a][1]).replace(
-                            '*', '').capitalize()],
-                        bin_[
-                            str(data["data"][a][1]).replace('*', '').capitalize()],
-                    )
+        for json_data in json_data_array:
+            waste = ''
+            for json_data_data in json_data['data']:
+                if json_data_data[EndDate.weekday()+1] == 0:
+                    waste += f"{json_data['scheme_type'][json_data_data[1].capitalize()]}{json_data['scheme_bin'][json_data_data[1].capitalize()]}\n"
 
-        message = "*Buonasera {} 🌆*\n*E' arrivato il momento di portare fuori:*\n\n{}_Esporre dalle ore 21:00 alle ore 24:00_".format(
-            location.replace('-', ' ').capitalize(), waste
-        )
+            message = f"*Buonasera { json_data['name']} 🌆*\n*E' arrivato il momento di portare fuori:*\n\n{waste} {json_data['desc']}"
+            if time == json_data['time']:
+                bot.send_message(chat_id=json_data['telegramid'], text=message,parse_mode="MarkdownV2")
 
-        # send the message on Telegram
-        bot.send_message(chat_id=CHAT_ID, text=message,
-                         parse_mode="MarkdownV2")
-
-        # print actualy date
-        print(str(date.today()))
-    return
+                # print actualy date
+                print(str(date.today()))
+            
 
 
-@ pidfile(pidname='/tmp/Locrideambiente.pid')
+@ pidfile(pidname='/tmp/differenziata.pid')
 def main():
-    print("--- Starting Locrideambiente ---")
+    print("--- Starting Differenziata ---")
     # Setup bot
     updater = Updater(TOKEN, use_context=True)
     dispatcher = updater.dispatcher
+    
 
-    schedule.every().day.at("21:00").do(dispatcher.run_async(job, updater.bot))
+    # Eseguire la richiesta GET per ottenere l'orario
+    response = requests.get(url_api)
+    json_data_array = response.json()
 
-    while True:
+    # Eseguire la richiesta GET per ottenere l'orario
+    response = requests.get(url_api)
+    # Estraggo il JSON dalla risposta
+    json_data_array = response.json()
+
+    orari = []
+    # create the message to be sent on Telegram
+    for json_data in json_data_array:
+        orari.append(json_data['time'])
+    
+    
+    for orario in orari:
+        schedule.every().day.at(orario).do(job, updater.bot, orario)
+
+    while True:        
         schedule.run_pending()
         time.sleep(30)  # wait 30 seconds
+
+    
 
 
 if __name__ == "__main__":
